@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>お金増殖ゲーム（クリック周りコイン＋大きめコイン）</title>
+<style>
+body{font-family:sans-serif;text-align:center;background:#111;color:#fff;margin:0}
+#bg{position:fixed;inset:0;z-index:-1}
+.money{font-size:34px;margin:18px 0}
+.panel{border:1px solid #333;padding:10px;margin:10px auto;max-width:900px;background:rgba(0,0,0,0.65);border-radius:10px}
+.info{font-size:13px;color:#aaa;line-height:1.6}
+.row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+button{font-size:14px;padding:8px 12px;margin:4px;cursor:pointer;border-radius:10px;border:1px solid #444;background:#1b1b1b;color:#fff}
+button:disabled{opacity:.4}
+.shop{display:grid;grid-template-columns:1fr;gap:8px}
+@media (min-width:900px){.shop{grid-template-columns:1fr 1fr}}
+.upg{display:flex;justify-content:space-between;gap:10px;padding:10px;border:1px solid #2a2a2a;border-radius:12px}
+.lock{opacity:.5}
+.name{font-weight:700}
+.badge{font-size:12px;border:1px solid #444;border-radius:999px;padding:2px 8px;margin-left:6px;color:#bbb}
+.small{font-size:12px;color:#bbb}
+</style>
+</head>
+<body>
+
+<canvas id="bg"></canvas>
+
+<h1>💰 お金増殖ゲーム（クリック周りコイン＋大きめコイン）</h1>
+<div class="money">所持金：¥<span id="money">0</span></div>
+
+<div class="panel info" id="stats"></div>
+
+<div class="row">
+<button id="clickBtn">クリックで稼ぐ</button>
+<button id="resetBtn">データリセット</button>
+</div>
+
+<div class="panel">
+<h3>🧩 強化ショップ（3周ごとに解放）</h3>
+<div id="shop" class="shop"></div>
+</div>
+
+<div class="panel">
+<h3>🌍 エンドコンテンツ</h3>
+<div class="row">
+<button id="prestigeBtn"></button>
+<button id="earthBtn"></button>
+<button id="universeBtn"></button>
+</div>
+</div>
+
+<script>
+const SAVE_KEY="idle_unlock_every3_with_earth_universe_coins_v2";
+let s=JSON.parse(localStorage.getItem(SAVE_KEY))||{
+ money:0,power:1,auto:0,
+ globalMul:1,permMul:0,
+ clickMul:1,autoMul:1,autoSpeed:1,
+ critChance:0,critMul:2,
+ cycle:0,buys:{},
+ earthLv:0,universeLv:0,
+ earths:[],universes:[]
+};
+function save(){localStorage.setItem(SAVE_KEY,JSON.stringify(s));}
+function fmt(x){return Math.floor(x).toLocaleString("ja-JP");}
+
+/* ========= 背景キャンバス（コイン＋地球＋宇宙） ========= */
+const canvas=document.getElementById("bg");
+const ctx=canvas.getContext("2d");
+function resize(){canvas.width=innerWidth;canvas.height=innerHeight;}
+addEventListener("resize",resize);resize();
+
+/* --- コイン（全体的に大きく） --- */
+let coins=[];
+let burstCoins=[]; // クリック周りのコイン
+
+function spawnCoin(n=1){
+ for(let i=0;i<n;i++){
+  if(coins.length>=320) return;
+  coins.push({
+   x:Math.random()*canvas.width,
+   y:canvas.height+40,
+   r:10+Math.random()*3,        // ★大きく
+   v:1.2+Math.random()*2.0,
+   wobble:(Math.random()*1.0+0.3),
+  });
+ }
+}
+
+function spawnBurst(x,y){
+ // カーソル周りにパッと出るコイン
+ const count = 6;
+ for(let i=0;i<count;i++){
+  if(burstCoins.length>=240) break;
+  const ang = (Math.PI*2) * (i/count) + (Math.random()*0.5);
+  const spd = 1.8 + Math.random()*2.5;
+  burstCoins.push({
+    x,y,
+    vx: Math.cos(ang)*spd,
+    vy: Math.sin(ang)*spd - 1.5,
+    r: 8 + Math.random()*3,     // ★大きめ
+    life: 40 + Math.floor(Math.random()*15),
+    rot: Math.random()*Math.PI*2
+  });
+ }
+}
+
+function drawCoinShape(x,y,r,alpha=1){
+ const g=ctx.createRadialGradient(x-r/3,y-r/3,1,x,y,r);
+ g.addColorStop(0,`rgba(255,248,176,${alpha})`);
+ g.addColorStop(0.35,`rgba(255,215,0,${alpha})`);
+ g.addColorStop(1,`rgba(139,106,0,${alpha})`);
+ ctx.fillStyle=g;
+ ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+ ctx.strokeStyle=`rgba(255,255,255,${0.25*alpha})`;
+ ctx.lineWidth=1; ctx.stroke();
+ ctx.fillStyle=`rgba(255,255,255,${0.35*alpha})`;
+ ctx.beginPath(); ctx.arc(x-r/3,y-r/3,r/3,0,Math.PI*2); ctx.fill();
+}
+
+/* --- 地球/宇宙 --- */
+function addEarthSprite(){
+ const r=14+Math.random()*10; // 少し大きめ
+ const x=50+Math.random()*(canvas.width-100);
+ const y=70+Math.random()*(canvas.height*0.45);
+ const blobs=Array.from({length:4+Math.floor(Math.random()*3)},()=>({
+  dx:(Math.random()*2-1)*r*0.35,
+  dy:(Math.random()*2-1)*r*0.35,
+  rx:r*(0.18+Math.random()*0.18),
+  ry:r*(0.12+Math.random()*0.16),
+  rot:Math.random()*Math.PI
+ }));
+ s.earths.push({x,y,r,blobs});
+}
+function drawEarth(e){
+ const r=e.r;
+ const g=ctx.createRadialGradient(e.x-r/3,e.y-r/3,1,e.x,e.y,r);
+ g.addColorStop(0,"rgba(180,230,255,0.9)");
+ g.addColorStop(0.5,"rgba(43,140,255,0.85)");
+ g.addColorStop(1,"rgba(10,43,107,0.85)");
+ ctx.fillStyle=g;
+ ctx.beginPath(); ctx.arc(e.x,e.y,r,0,Math.PI*2); ctx.fill();
+
+ ctx.fillStyle="rgba(60,220,120,0.85)";
+ for(const b of e.blobs){
+  ctx.beginPath();
+  ctx.ellipse(e.x+b.dx,e.y+b.dy,b.rx,b.ry,b.rot,0,Math.PI*2);
+  ctx.fill();
+ }
+
+ ctx.strokeStyle="rgba(255,255,255,0.18)";
+ ctx.lineWidth=1;
+ ctx.beginPath(); ctx.arc(e.x,e.y,r,0,Math.PI*2); ctx.stroke();
+}
+function addUniverseSprite(){
+ const r=16+Math.random()*12;
+ const x=50+Math.random()*(canvas.width-100);
+ const y=70+Math.random()*(canvas.height*0.45);
+ const stars=Array.from({length:18+Math.floor(Math.random()*14)},()=>({
+  dx:(Math.random()*2-1)*r*0.85,
+  dy:(Math.random()*2-1)*r*0.85,
+  s:0.8+Math.random()*1.8,
+  c:Math.random()<0.75?"rgba(255,255,255,0.75)":"rgba(170,200,255,0.7)"
+ })).filter(st=>(st.dx*st.dx+st.dy*st.dy)<(r*r));
+ s.universes.push({x,y,r,stars,phase:Math.random()*Math.PI*2});
+}
+function drawUniverse(u){
+ const r=u.r;
+ const g=ctx.createRadialGradient(u.x,u.y,1,u.x,u.y,r);
+ g.addColorStop(0,"rgba(170,200,255,0.22)");
+ g.addColorStop(0.55,"rgba(120,140,255,0.08)");
+ g.addColorStop(1,"rgba(0,0,0,0)");
+ ctx.fillStyle=g;
+ ctx.beginPath(); ctx.arc(u.x,u.y,r,0,Math.PI*2); ctx.fill();
+
+ for(const st of u.stars){
+  ctx.fillStyle=st.c;
+  ctx.beginPath(); ctx.arc(u.x+st.dx,u.y+st.dy,st.s,0,Math.PI*2); ctx.fill();
+ }
+}
+
+/* ========= ゲーム計算 ========= */
+function worldMul(){
+ let m=(s.globalMul+s.permMul);
+ m*=Math.pow(1.12,s.earthLv);
+ m*=Math.pow(1.35,s.universeLv);
+ return m;
+}
+function clickGain(){
+ let g=s.power*worldMul()*s.clickMul;
+ if(Math.random()*100<s.critChance) g*=s.critMul;
+ return g;
+}
+function autoGain(){
+ return s.auto*s.power*worldMul()*s.autoMul*0.25*s.autoSpeed;
+}
+function shopScale(){return Math.pow(1.25,s.cycle);}
+
+function prestigeCost(){return Math.floor(1e6*Math.pow(1.35,s.cycle));}
+function earthCost(){return Math.floor(1e7*Math.pow(1.55,s.earthLv));}
+function universeCost(){return Math.floor(1e9*Math.pow(1.75,s.universeLv));}
+function tierUnlocked(t){return s.cycle>=t*3;}
+
+/* ========= 強化 ========= */
+const upgrades=[
+{id:"power",tier:0,name:"クリック力 +1",badge:"基本",base:50,mult:1.15,desc:"クリック+1",apply:()=>s.power++},
+{id:"auto",tier:0,name:"自動クリック +1",badge:"基本",base:100,mult:1.18,desc:"自動+1/秒",apply:()=>s.auto++},
+{id:"click10",tier:0,name:"クリック倍率 +10%",badge:"基本",base:500,mult:1.22,desc:"クリック×1.10",apply:()=>s.clickMul*=1.1},
+{id:"auto10",tier:0,name:"自動倍率 +10%",badge:"基本",base:1000,mult:1.22,desc:"自動×1.10",apply:()=>s.autoMul*=1.1},
+
+{id:"g50",tier:1,name:"全体倍率 +50%",badge:"中級(3周)",base:10000,mult:1.35,desc:"世界+0.50",apply:()=>s.globalMul+=0.5},
+{id:"click25",tier:1,name:"クリック倍率 +25%",badge:"中級(3周)",base:2000,mult:1.25,desc:"クリック×1.25",apply:()=>s.clickMul*=1.25},
+{id:"auto25",tier:1,name:"自動倍率 +25%",badge:"中級(3周)",base:5000,mult:1.25,desc:"自動×1.25",apply:()=>s.autoMul*=1.25},
+{id:"crit1",tier:1,name:"クリ率 +1%",badge:"中級(3周)",base:1500,mult:1.30,desc:"クリ率+1%",apply:()=>s.critChance=Math.min(80,s.critChance+1)},
+
+{id:"autospeed",tier:2,name:"自動速度 ×2",badge:"上級(6周)",base:20000,mult:1.60,desc:"自動×2（量）",apply:()=>s.autoSpeed*=2},
+{id:"g200",tier:2,name:"全体倍率 +200%",badge:"上級(6周)",base:100000,mult:1.45,desc:"世界+2.00",apply:()=>s.globalMul+=2},
+{id:"critMul",tier:2,name:"クリ倍 +0.5",badge:"上級(6周)",base:12000,mult:1.35,desc:"クリ倍+0.5",apply:()=>s.critMul+=0.5},
+{id:"power10",tier:2,name:"クリック力 +10",badge:"上級(6周)",base:80000,mult:1.35,desc:"クリック+10",apply:()=>s.power+=10},
+
+{id:"g500",tier:3,name:"全体倍率 +500%",badge:"究極(9周)",base:1000000,mult:1.55,desc:"世界+5.00",apply:()=>s.globalMul+=5},
+{id:"auto10x",tier:3,name:"自動クリック +10",badge:"究極(9周)",base:300000,mult:1.40,desc:"自動+10",apply:()=>s.auto+=10},
+{id:"click2x",tier:3,name:"クリック倍率 ×2",badge:"究極(9周)",base:250000,mult:1.35,desc:"クリック×2",apply:()=>s.clickMul*=2},
+];
+
+function costOf(u){
+ const n=s.buys[u.id]||0;
+ return Math.floor(u.base*Math.pow(u.mult,n)*shopScale());
+}
+function buy(id){
+ const u=upgrades.find(x=>x.id===id);
+ if(!u) return;
+ if(!tierUnlocked(u.tier)) return;
+ const cost=costOf(u);
+ if(s.money<cost) return;
+ s.money-=cost;
+ u.apply();
+ s.buys[u.id]=(s.buys[u.id]||0)+1;
+ spawnCoin(2);
+ updateUI();
+}
+
+/* ========= エンド ========= */
+function doPrestige(){
+ if(s.money<prestigeCost()) return;
+ s.money=0;s.power=1;s.auto=0;
+ s.globalMul=1;s.clickMul=1;s.autoMul=1;s.autoSpeed=1;
+ s.critChance=0;s.critMul=2;
+ s.buys={};
+ s.cycle++;
+ s.permMul+=0.5+(s.cycle*0.05);
+ coins=[]; burstCoins=[]; // 崩壊
+ updateUI();
+}
+function unlockEarth(){
+ const c=earthCost();
+ if(s.money<c) return;
+ s.money-=c;
+ s.earthLv++;
+ addEarthSprite();
+ updateUI();
+}
+function unlockUniverse(){
+ const c=universeCost();
+ if(s.money<c) return;
+ s.money-=c;
+ s.universeLv++;
+ addUniverseSprite();
+ updateUI();
+}
+
+/* ========= UI ========= */
+const moneyEl=document.getElementById("money");
+const statsEl=document.getElementById("stats");
+const shopEl=document.getElementById("shop");
+const clickBtn=document.getElementById("clickBtn");
+const resetBtn=document.getElementById("resetBtn");
+const prestigeBtn=document.getElementById("prestigeBtn");
+const earthBtn=document.getElementById("earthBtn");
+const universeBtn=document.getElementById("universeBtn");
+
+function renderShop(){
+ shopEl.innerHTML="";
+ upgrades.forEach(u=>{
+  const unlocked=tierUnlocked(u.tier);
+  const cost=costOf(u);
+  const wrap=document.createElement("div");
+  wrap.className="upg"+(unlocked?"":" lock");
+  wrap.innerHTML=`<div style="text-align:left">
+    <div><span class="name">${u.name}</span><span class="badge">${u.badge}</span></div>
+    <div class="small">${u.desc} / Lv.${s.buys[u.id]||0}${unlocked?"":` / 解放：転生${u.tier*3}回`}</div>
+  </div>`;
+  const b=document.createElement("button");
+  b.textContent=unlocked?`購入（¥${fmt(cost)}）`:"未解放";
+  b.disabled=!unlocked||s.money<cost;
+  b.onclick=()=>buy(u.id);
+  wrap.appendChild(b);
+  shopEl.appendChild(wrap);
+ });
+}
+
+function updateUI(){
+ moneyEl.textContent=fmt(s.money);
+ statsEl.innerHTML=
+ `転生:${s.cycle} / ショップ倍率×${shopScale().toFixed(2)} / 永久倍率:${s.permMul.toFixed(2)}<br>
+ 世界倍率:${worldMul().toFixed(2)}（地球Lv:${s.earthLv} / 宇宙Lv:${s.universeLv}）`;
+ renderShop();
+ prestigeBtn.textContent=`転生（¥${fmt(prestigeCost())}）`;
+ prestigeBtn.disabled=s.money<prestigeCost();
+ earthBtn.textContent=`地球解放 Lv.${s.earthLv}（¥${fmt(earthCost())}）`;
+ earthBtn.disabled=s.money<earthCost();
+ universeBtn.textContent=`宇宙解放 Lv.${s.universeLv}（¥${fmt(universeCost())}）`;
+ universeBtn.disabled=s.money<universeCost();
+ save();
+}
+
+/* ========= カーソル位置追跡（クリック演出用） ========= */
+let pointerX = innerWidth/2, pointerY = innerHeight/2;
+addEventListener("pointermove",(e)=>{pointerX=e.clientX; pointerY=e.clientY;}, {passive:true});
+
+/* ========= 操作 ========= */
+clickBtn.onclick=()=>{
+ const g=clickGain();
+ s.money+=g;
+
+ // 背景コイン（上昇）
+ spawnCoin(Math.min(3, Math.max(1, Math.floor(g/1200))));
+
+ // ★クリックした瞬間：カーソル周りにコイン
+ spawnBurst(pointerX, pointerY);
+
+ updateUI();
+};
+
+prestigeBtn.onclick=doPrestige;
+earthBtn.onclick=unlockEarth;
+universeBtn.onclick=unlockUniverse;
+resetBtn.onclick=()=>{if(confirm("リセットしますか？")){localStorage.removeItem(SAVE_KEY);location.reload();}};
+
+setInterval(()=>{
+ const g=autoGain();
+ if(g>0){
+  s.money+=g;
+  spawnCoin(1);
+  updateUI();
+ }
+},1000);
+
+/* ========= 描画ループ ========= */
+function frame(){
+ ctx.clearRect(0,0,canvas.width,canvas.height);
+
+ // 背景（地球/宇宙）
+ for(const e of s.earths) drawEarth(e);
+ for(const u of s.universes) drawUniverse(u);
+
+ // 背景コイン
+ for(const c of coins){
+  c.y-=c.v;
+  c.x+=Math.sin(c.y*0.02)*c.wobble;
+  drawCoinShape(c.x,c.y,c.r,0.95);
+ }
+ coins=coins.filter(c=>c.y>-60);
+
+ // クリック周りコイン（飛び散って消える）
+ for(const b of burstCoins){
+  b.x += b.vx;
+  b.y += b.vy;
+  b.vy += 0.06; // 重力
+  b.vx *= 0.98; b.vy *= 0.98;
+  b.life -= 1;
+  const a = Math.max(0, Math.min(1, b.life/45));
+  drawCoinShape(b.x,b.y,b.r,a);
+ }
+ burstCoins = burstCoins.filter(b=>b.life>0 && b.y<canvas.height+80 && b.x>-80 && b.x<canvas.width+80);
+
+ requestAnimationFrame(frame);
+}
+frame();
+
+/* セーブ復元時：地球/宇宙Lvに対してスプライト不足なら補完 */
+(function ensureSprites(){
+ while(s.earths.length < s.earthLv) addEarthSprite();
+ while(s.universes.length < s.universeLv) addUniverseSprite();
+})();
+updateUI();
+</script>
+</body>
+</html>
